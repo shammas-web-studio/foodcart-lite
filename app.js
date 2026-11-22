@@ -198,7 +198,7 @@ function renderCategories() {
   const bar = document.getElementById('categoryBar');
   bar.innerHTML = cats.map(c => {
     const active = c === activeCategory;
-    return `<button data-cat="${esc(c)}" class="px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition ${active ? 'brand-bg text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">${esc(c)}</button>`;
+    return `<button data-cat="${esc(c)}" class="pill ${active ? 'pill-on' : ''}">${esc(c)}</button>`;
   }).join('');
 }
 
@@ -282,14 +282,19 @@ function renderMenu() {
   container.innerHTML = Object.entries(grouped).map(([cat, items]) => `
     <section>
       <div class="flex items-center justify-between mb-2.5">
-        <h2 class="text-base font-extrabold text-slate-900">${esc(cat)}</h2>
-        <span class="text-[11px] font-bold text-slate-400">${items.length} items</span>
+        <h2 class="font-display text-[22px] font-bold text-slate-900">${esc(cat)}</h2>
+        <span class="text-xs font-semibold text-slate-500">${items.length} items</span>
       </div>
-      <div class="space-y-3">
+      <div class="surface">
         ${items.map(renderItemCard).join('')}
       </div>
     </section>
   `).join('');
+}
+
+function vegDot(isVeg) {
+  const c = isVeg ? 'emerald' : 'red';
+  return `<span class="w-3.5 h-3.5 border border-${c}-600 flex items-center justify-center rounded-[3px] shrink-0" title="${isVeg ? 'Veg' : 'Non-Veg'}"><span class="w-1.5 h-1.5 rounded-full bg-${c}-600"></span></span>`;
 }
 
 function renderItemCard(item) {
@@ -297,60 +302,46 @@ function renderItemCard(item) {
   const isSoldOut = item.status.toLowerCase().trim() === 'sold out';
   const vIdx = selectedVariants[item.id] || 0;
   const activeVariant = item.variants[vIdx];
-  const cartKey = `${item.id}__${vIdx}`;
-  const qty = cart[cartKey]?.qty || 0;
+  const qty = cart[`${item.id}__${vIdx}`]?.qty || 0;
   const hasMultipleVariants = item.variants.length > 1;
 
-  const dotHtml = isVeg
-    ? `<span class="w-3.5 h-3.5 border border-emerald-600 flex items-center justify-center rounded-[3px] shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-emerald-600"></span></span>`
-    : `<span class="w-3.5 h-3.5 border border-red-600 flex items-center justify-center rounded-[3px] shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-red-600"></span></span>`;
-
   const variantsHtml = hasMultipleVariants ? `
-    <div class="flex flex-wrap gap-1.5 mt-2.5">
+    <div class="flex flex-wrap gap-2 mt-3">
       ${item.variants.map((v, idx) => `
-        <button onclick="selectVariant('${item.id}', ${idx})" class="px-2.5 py-1 rounded-lg text-xs font-bold border transition ${idx === vIdx ? 'brand-border bg-orange-50 brand-text' : 'border-slate-200 text-slate-600 bg-slate-50'}">
-          ${esc(v.label)} • ₹${v.price}
-        </button>
+        <button onclick="selectVariant('${item.id}', ${idx})" class="chip ${idx === vIdx ? 'chip-on' : ''}">${esc(v.label)} • ₹${v.price}</button>
       `).join('')}
-    </div>
-  ` : '';
+    </div>` : '';
 
-  let actionHtml = '';
+  let actionHtml;
   if (isSoldOut) {
-    actionHtml = `<span class="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 text-xs font-bold">Sold Out</span>`;
+    actionHtml = `<span class="tag-off">Sold out</span>`;
   } else if (!isStoreOpen) {
-    actionHtml = `<span class="px-3 py-1.5 rounded-xl bg-slate-100 text-slate-400 text-xs font-bold">Closed</span>`;
+    actionHtml = `<span class="tag-off">Closed</span>`;
   } else if (qty === 0) {
-    actionHtml = `<button onclick="updateQty('${item.id}', ${vIdx}, 1)" class="px-4 py-2 rounded-xl border-2 brand-border brand-text hover:bg-orange-50 font-extrabold text-xs uppercase tracking-wide transition active:scale-95">+ Add</button>`;
+    actionHtml = `<button onclick="updateQty('${item.id}', ${vIdx}, 1)" class="btn-add">+ Add</button>`;
   } else {
     actionHtml = `
-      <div class="inline-flex items-center brand-bg text-white rounded-xl overflow-hidden shadow-sm">
-        <button onclick="updateQty('${item.id}', ${vIdx}, -1)" class="px-3 py-1.5 font-extrabold text-sm hover:bg-black/10">−</button>
-        <span class="px-2.5 text-xs font-extrabold">${qty}</span>
-        <button onclick="updateQty('${item.id}', ${vIdx}, 1)" class="px-3 py-1.5 font-extrabold text-sm hover:bg-black/10">+</button>
-      </div>
-    `;
+      <div class="stepper">
+        <button onclick="updateQty('${item.id}', ${vIdx}, -1)" aria-label="Remove one">−</button>
+        <span>${qty}</span>
+        <button onclick="updateQty('${item.id}', ${vIdx}, 1)" aria-label="Add one">+</button>
+      </div>`;
   }
 
   return `
-    <div class="bg-white rounded-2xl p-4 border border-slate-200/70 shadow-sm ${isSoldOut ? 'opacity-65' : ''}">
-      <div class="flex items-start justify-between gap-3">
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-2 flex-wrap">
-            ${dotHtml}
-            ${item.badge ? `<span class="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">${esc(item.badge)}</span>` : ''}
-          </div>
-          <h3 class="text-[15px] font-bold text-slate-900 mt-1 leading-snug">${esc(item.name)}</h3>
-          <div class="text-sm font-extrabold text-slate-800 mt-0.5">₹${activeVariant.price} ${hasMultipleVariants ? `<span class="text-xs font-medium text-slate-400">(${esc(activeVariant.label)})</span>` : ''}</div>
-          ${item.description ? `<p class="text-xs text-slate-500 mt-1 leading-relaxed">${esc(item.description)}</p>` : ''}
-          ${variantsHtml}
+    <article class="item ${isSoldOut ? 'is-soldout' : ''}">
+      <div class="item-body flex-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          ${vegDot(isVeg)}
+          ${item.badge ? `<span class="badge">${esc(item.badge)}</span>` : ''}
         </div>
-        <div class="shrink-0 pt-1">
-          ${actionHtml}
-        </div>
+        <h3 class="item-name">${esc(item.name)}</h3>
+        <div class="item-price font-display">₹${activeVariant.price}${hasMultipleVariants ? ` <span class="text-xs font-medium text-slate-500">${esc(activeVariant.label)}</span>` : ''}</div>
+        ${item.description ? `<p class="item-desc">${esc(item.description)}</p>` : ''}
+        ${variantsHtml}
       </div>
-    </div>
-  `;
+      <div class="w-24 shrink-0 flex flex-col justify-center">${actionHtml}</div>
+    </article>`;
 }
 
 function getCartStats() {
