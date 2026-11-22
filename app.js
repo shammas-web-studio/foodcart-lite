@@ -11,6 +11,31 @@ const urlParams = new URLSearchParams(window.location.search);
 const clientId = (urlParams.get("id") || "").toLowerCase().trim();
 const API_URL = clientId ? CLIENTS[clientId] : null;
 
+// Escape text coming from the Google Sheet before putting it in HTML
+const esc = s => String(s ?? '').replace(/[&<>"']/g,
+  c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Cart persistence (per store, survives refresh)
+const CART_KEY = `foodcart_cart_${clientId}`;
+function saveCart() {
+  try {
+    const data = Object.values(cart).map(e => ({ id: e.item.id, n: e.item.name, v: e.variantIdx, q: e.qty }));
+    localStorage.setItem(CART_KEY, JSON.stringify(data));
+  } catch (_) {}
+}
+function loadCart() {
+  try {
+    const data = JSON.parse(localStorage.getItem(CART_KEY) || '[]');
+    data.forEach(d => {
+      const item = menuItems.find(i => i.id === d.id && i.name === d.n);
+      const variant = item && item.variants[d.v];
+      if (item && variant && d.q > 0) {
+        cart[`${d.id}__${d.v}`] = { item, variant, variantIdx: d.v, qty: d.q };
+      }
+    });
+  } catch (_) {}
+}
+
 let menuItems = [];
 let settings = {};
 let selectedVariants = {};
@@ -31,6 +56,20 @@ function format12Hour(hhmm) {
   return `${h}:${mStr} ${ampm}`;
 }
 
+// Current time in the SHOP's timezone (not the customer's phone)
+function shopNowMinutes() {
+  const tz = settings['Time Zone'] || 'Asia/Kolkata';
+  let parts;
+  try {
+    parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  } catch (_) {
+    parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date());
+  }
+  const h = parseInt(parts.find(p => p.type === 'hour').value, 10) % 24;
+  const m = parseInt(parts.find(p => p.type === 'minute').value, 10);
+  return h * 60 + m;
+}
+
 function computeStoreOpenState() {
   const mode = (settings['Shop Status'] || 'OPEN').toUpperCase().trim();
   const openStr = settings['Open Time'] || '';
@@ -46,8 +85,7 @@ function computeStoreOpenState() {
   if (mode === 'AUTO' && openStr.includes(':') && closeStr.includes(':')) {
     const [oH, oM] = openStr.split(':').map(Number);
     const [cH, cM] = closeStr.split(':').map(Number);
-    const now = new Date();
-    const curMins = now.getHours() * 60 + now.getMinutes();
+    const curMins = shopNowMinutes();
     const openMins = oH * 60 + oM;
     const closeMins = cH * 60 + cM;
 
@@ -77,7 +115,7 @@ async function init() {
   if (!API_URL) {
     document.getElementById('skeleton').innerHTML = `
       <div class="p-6 text-center bg-white rounded-2xl border border-red-100 text-red-600 text-sm font-semibold space-y-3">
-        <p>Store ID "<strong>${clientId}</strong>" not found. Please check the QR link.</p>
+        <p>Store ID "<strong>${esc(clientId)}</strong>" not found. Please check the QR link.</p>
         <a href="./" class="inline-block text-xs font-bold text-orange-600 underline">← Back to FoodCart Home</a>
       </div>`;
     return;
@@ -90,9 +128,11 @@ async function init() {
     settings = data.settings || {};
     menuItems = data.items || [];
     menuItems.forEach(it => selectedVariants[it.id] = 0);
+    loadCart();
     applySettings();
     renderCategories();
     renderMenu();
+    updateFloatingCart();
   } catch (err) {
     document.getElementById('skeleton').innerHTML = `
       <div class="p-6 text-center bg-white rounded-2xl border border-red-100 text-red-600 text-sm font-semibold">
@@ -158,9 +198,14 @@ function renderCategories() {
   const bar = document.getElementById('categoryBar');
   bar.innerHTML = cats.map(c => {
     const active = c === activeCategory;
-    return `<button onclick="selectCategory('${c.replace(/'/g, "\\'")}')" class="px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition ${active ? 'brand-bg text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">${c}</button>`;
+    return `<button data-cat="${esc(c)}" class="px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition ${active ? 'brand-bg text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">${esc(c)}</button>`;
   }).join('');
 }
+
+document.getElementById('categoryBar').addEventListener('click', e => {
+  const btn = e.target.closest('[data-cat]');
+  if (btn) selectCategory(btn.dataset.cat);
+});
 
 function selectCategory(cat) {
   activeCategory = cat;
@@ -199,6 +244,7 @@ function updateQty(itemId, variantIdx, delta) {
     cart[key].qty += delta;
     if (cart[key].qty <= 0) delete cart[key];
   }
+  saveCart();
   renderMenu();
   updateFloatingCart();
   if (!document.getElementById('checkoutModal').classList.contains('hidden')) {
@@ -236,7 +282,7 @@ function renderMenu() {
   container.innerHTML = Object.entries(grouped).map(([cat, items]) => `
     <section>
       <div class="flex items-center justify-between mb-2.5">
-        <h2 class="text-base font-extrabold text-slate-900">${cat}</h2>
+        <h2 class="text-base font-extrabold text-slate-900">${esc(cat)}</h2>
         <span class="text-[11px] font-bold text-slate-400">${items.length} items</span>
       </div>
       <div class="space-y-3">
@@ -263,7 +309,7 @@ function renderItemCard(item) {
     <div class="flex flex-wrap gap-1.5 mt-2.5">
       ${item.variants.map((v, idx) => `
         <button onclick="selectVariant('${item.id}', ${idx})" class="px-2.5 py-1 rounded-lg text-xs font-bold border transition ${idx === vIdx ? 'brand-border bg-orange-50 brand-text' : 'border-slate-200 text-slate-600 bg-slate-50'}">
-          ${v.label} • ₹${v.price}
+          ${esc(v.label)} • ₹${v.price}
         </button>
       `).join('')}
     </div>
@@ -278,7 +324,7 @@ function renderItemCard(item) {
     actionHtml = `<button onclick="updateQty('${item.id}', ${vIdx}, 1)" class="px-4 py-2 rounded-xl border-2 brand-border brand-text hover:bg-orange-50 font-extrabold text-xs uppercase tracking-wide transition active:scale-95">+ Add</button>`;
   } else {
     actionHtml = `
-      <div class="inline-flex items-center brand-bg text-white rounded-xl overflow-hidden shadow-xs">
+      <div class="inline-flex items-center brand-bg text-white rounded-xl overflow-hidden shadow-sm">
         <button onclick="updateQty('${item.id}', ${vIdx}, -1)" class="px-3 py-1.5 font-extrabold text-sm hover:bg-black/10">−</button>
         <span class="px-2.5 text-xs font-extrabold">${qty}</span>
         <button onclick="updateQty('${item.id}', ${vIdx}, 1)" class="px-3 py-1.5 font-extrabold text-sm hover:bg-black/10">+</button>
@@ -287,16 +333,16 @@ function renderItemCard(item) {
   }
 
   return `
-    <div class="bg-white rounded-2xl p-4 border border-slate-200/70 shadow-2xs ${isSoldOut ? 'opacity-65' : ''}">
+    <div class="bg-white rounded-2xl p-4 border border-slate-200/70 shadow-sm ${isSoldOut ? 'opacity-65' : ''}">
       <div class="flex items-start justify-between gap-3">
         <div class="flex-1 min-w-0">
           <div class="flex items-center gap-2 flex-wrap">
             ${dotHtml}
-            ${item.badge ? `<span class="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">${item.badge}</span>` : ''}
+            ${item.badge ? `<span class="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-100 text-amber-800">${esc(item.badge)}</span>` : ''}
           </div>
-          <h3 class="text-[15px] font-bold text-slate-900 mt-1 leading-snug">${item.name}</h3>
-          <div class="text-sm font-extrabold text-slate-800 mt-0.5">₹${activeVariant.price} ${hasMultipleVariants ? `<span class="text-xs font-medium text-slate-400">(${activeVariant.label})</span>` : ''}</div>
-          ${item.description ? `<p class="text-xs text-slate-500 mt-1 leading-relaxed">${item.description}</p>` : ''}
+          <h3 class="text-[15px] font-bold text-slate-900 mt-1 leading-snug">${esc(item.name)}</h3>
+          <div class="text-sm font-extrabold text-slate-800 mt-0.5">₹${activeVariant.price} ${hasMultipleVariants ? `<span class="text-xs font-medium text-slate-400">(${esc(activeVariant.label)})</span>` : ''}</div>
+          ${item.description ? `<p class="text-xs text-slate-500 mt-1 leading-relaxed">${esc(item.description)}</p>` : ''}
           ${variantsHtml}
         </div>
         <div class="shrink-0 pt-1">
@@ -351,12 +397,12 @@ function setOrderMode(mode) {
   const dBtn = document.getElementById('modeDeliveryBtn');
   const tBtn = document.getElementById('modeTakeawayBtn');
   if (mode === 'delivery') {
-    dBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition bg-white text-slate-900 shadow-xs';
+    dBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition bg-white text-slate-900 shadow-sm';
     tBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition text-slate-500';
     document.getElementById('deliveryFields').classList.remove('hidden');
     document.getElementById('takeawayFields').classList.add('hidden');
   } else {
-    tBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition bg-white text-slate-900 shadow-xs';
+    tBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition bg-white text-slate-900 shadow-sm';
     dBtn.className = 'py-2.5 rounded-lg text-xs font-extrabold transition text-slate-500';
     document.getElementById('takeawayFields').classList.remove('hidden');
     document.getElementById('deliveryFields').classList.add('hidden');
@@ -381,9 +427,12 @@ function renderCheckoutModal() {
     } else if (freeAbove > 0 && subtotal < freeAbove) {
       banner.className = 'text-xs font-semibold px-3.5 py-2.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-200';
       banner.textContent = `💡 Add ₹${freeAbove - subtotal} more to unlock FREE Home Delivery!`;
-    } else {
+    } else if (deliveryFee === 0) {
       banner.className = 'text-xs font-bold px-3.5 py-2.5 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200';
       banner.textContent = `🎉 Yay! You unlocked FREE Home Delivery on this order.`;
+    } else {
+      banner.className = 'text-xs font-semibold px-3.5 py-2.5 rounded-xl bg-amber-50 text-amber-800 border border-amber-200';
+      banner.textContent = `🛵 Home Delivery charge of ₹${deliveryFee} applies.`;
     }
   } else {
     banner.className = 'text-xs font-semibold px-3.5 py-2.5 rounded-xl bg-blue-50 text-blue-800 border border-blue-200';
@@ -393,8 +442,8 @@ function renderCheckoutModal() {
   document.getElementById('modalCartItems').innerHTML = entries.map(([key, e]) => `
     <div class="py-3 flex items-center justify-between gap-2">
       <div>
-        <div class="text-xs font-bold text-slate-900">${e.item.name}</div>
-        <div class="text-[11px] text-slate-500">${e.variant.label} • ₹${e.variant.price} × ${e.qty}</div>
+        <div class="text-xs font-bold text-slate-900">${esc(e.item.name)}</div>
+        <div class="text-[11px] text-slate-500">${esc(e.variant.label)} • ₹${e.variant.price} × ${e.qty}</div>
       </div>
       <div class="flex items-center gap-2.5">
         <span class="text-xs font-extrabold text-slate-800">₹${e.variant.price * e.qty}</span>
@@ -459,6 +508,10 @@ function sendWhatsAppOrder() {
     alert('Please enter your Name and Mobile Number.');
     return;
   }
+  if (phone.replace(/\D/g, '').length < 10) {
+    alert('Please enter a valid 10-digit mobile number.');
+    return;
+  }
   if (orderMode === 'delivery' && isLandmarkRequired && !address) {
     alert('Please enter your House / Flat Name, Area & Landmark.');
     return;
@@ -499,6 +552,13 @@ function sendWhatsAppOrder() {
 
   const url = `https://wa.me/${shopWhatsApp}?text=${encodeURIComponent(msg)}`;
   window.open(url, '_blank');
+
+  // Order sent: reset cart
+  cart = {};
+  saveCart();
+  closeCheckout();
+  renderMenu();
+  updateFloatingCart();
 }
 
 init();
